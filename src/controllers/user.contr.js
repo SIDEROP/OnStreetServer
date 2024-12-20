@@ -2,7 +2,9 @@ import asyncHandler from '../utils/asyncHandler.js';
 import User from '../models/User.model.js';
 import ApiError from '../utils/ApiError.js';
 import ApiResponse from '../utils/apiResponse.js';
+import passport from 'passport';
 import jwt from 'jsonwebtoken';
+import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
 
 // Register a new user
 export const register = asyncHandler(async (req, res) => {
@@ -85,4 +87,55 @@ export const authentication = asyncHandler(async (req, res) => {
     throw new ApiError(401, 'Unauthorized request');
   }
   res.status(200).json(new ApiResponse(200, user, 'User authenticated successfully'));
+});
+
+// Add passport Google strategy configuration
+passport.use(
+  new GoogleStrategy(
+    {
+      clientID: process.env.GOOGLE_CLIENT_ID,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+      callbackURL: '/api/v1/auth/google/callback',
+    },
+    async (accessToken, _, profile, done) => {
+      try {
+        let user = await User.findOne({ email: profile.emails[0].value });
+
+        if (!user) {
+          user = await User.create({
+            name: profile.displayName,
+            email: profile.emails[0].value,
+            password: `google_${profile.id}`,
+            googleId: profile.id,
+          });
+        }
+
+        return done(null, user);
+      } catch (error) {
+        return done(error, null);
+      }
+    },
+  ),
+);
+
+// Google authentication routes
+export const googleAuth = passport.authenticate('google', {
+  scope: ['profile', 'email'],
+});
+
+export const googleAuthCallback = asyncHandler(async (req, res, next) => {
+  passport.authenticate('google', { session: false }, async (err, user) => {
+    if (err || !user) {
+      throw new ApiError(401, 'Google authentication failed');
+    }
+
+    const accessToken = user.generateToken();
+
+    res.cookie('accessToken', accessToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+    });
+
+    res.redirect(process.env.CLIENT_URL);
+  })(req, res, next);
 });
